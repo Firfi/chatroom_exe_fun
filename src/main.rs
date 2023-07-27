@@ -261,7 +261,7 @@ fn set_window_icon(
 
 const CONNECTION: &'static str = "ws://localhost:80";
 
-fn websocket_system() {
+fn websocket_system(events: &mut EventWriter<ChatMessageSentStartedEvent>,) {
     println!("Connecting to {}", CONNECTION);
 
     // TODO reconnects
@@ -278,36 +278,6 @@ fn websocket_system() {
     let (tx, rx) = channel();
 
     let tx_1 = tx.clone();
-
-    let send_loop = thread::spawn(move || {
-        loop {
-            // Send loop
-            let message = match rx.recv() {
-                Ok(m) => m,
-                Err(e) => {
-                    println!("Send Loop: {:?}", e);
-                    return;
-                }
-            };
-            match message {
-                OwnedMessage::Close(_) => {
-                    let _ = sender.send_message(&message);
-                    // If it's a close message, just send it and then return.
-                    return;
-                }
-                _ => (),
-            }
-            // Send the message
-            match sender.send_message(&message) {
-                Ok(()) => (),
-                Err(e) => {
-                    println!("Send Loop: {:?}", e);
-                    let _ = sender.send_message(&Message::close());
-                    return;
-                }
-            }
-        }
-    });
 
     let receive_loop = thread::spawn(move || {
         // Receive loop
@@ -337,7 +307,10 @@ fn websocket_system() {
                     }
                 }
                 // Say what we received
-                _ => println!("Receive Loop: {:?}", message),
+                _ => {
+                    println!("Receive Loop: {:?}", message);
+                    events.send(ChatMessageReceivedEvent(message.to_string()));
+                },
             }
         }
     });
