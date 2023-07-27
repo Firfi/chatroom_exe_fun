@@ -6,6 +6,11 @@ use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy::window::{WindowTheme};
 use winit::window::{Icon};
 use image;
+use std::sync::mpsc::channel;
+use std::thread;
+
+use websocket::client::ClientBuilder;
+use websocket::{Message, OwnedMessage};
 
 #[derive(Default, Resource)]
 struct OccupiedScreenSpace {
@@ -50,6 +55,7 @@ fn main() {
         .init_resource::<UiState>()
         .add_systems(Startup, set_window_icon)
         .add_systems(Startup, setup_system)
+        .add_systems(Startup, websocket_system)
         .add_systems(Update, ui_example_system)
         .add_event::<ChatMessageSentStartedEvent>()
         .add_event::<ChatMessageSentSuccessEvent>()
@@ -251,4 +257,89 @@ fn set_window_icon(
     let icon = Icon::from_rgba(icon_rgba, icon_width, icon_height).unwrap();
 
     primary.set_window_icon(Some(icon));
+}
+
+const CONNECTION: &'static str = "ws://localhost:80";
+
+fn websocket_system() {
+    println!("Connecting to {}", CONNECTION);
+
+    // TODO reconnects
+    let client = ClientBuilder::new(CONNECTION)
+        .unwrap()
+        .add_protocol("rust-websocket")
+        .connect_insecure()
+        .unwrap();
+
+    println!("Successfully connected");
+
+    let (mut receiver, mut sender) = client.split().unwrap();
+
+    let (tx, rx) = channel();
+
+    let tx_1 = tx.clone();
+
+    let send_loop = thread::spawn(move || {
+        loop {
+            // Send loop
+            let message = match rx.recv() {
+                Ok(m) => m,
+                Err(e) => {
+                    println!("Send Loop: {:?}", e);
+                    return;
+                }
+            };
+            match message {
+                OwnedMessage::Close(_) => {
+                    let _ = sender.send_message(&message);
+                    // If it's a close message, just send it and then return.
+                    return;
+                }
+                _ => (),
+            }
+            // Send the message
+            match sender.send_message(&message) {
+                Ok(()) => (),
+                Err(e) => {
+                    println!("Send Loop: {:?}", e);
+                    let _ = sender.send_message(&Message::close());
+                    return;
+                }
+            }
+        }
+    });
+
+    let receive_loop = thread::spawn(move || {
+        // Receive loop
+        for message in receiver.incoming_messages() {
+            let message = match message {
+                Ok(m) => m,
+                Err(e) => {
+                    println!("Receive Loop: {:?}", e);
+                    let _ = tx_1.send(OwnedMessage::Close(None));
+                    return;
+                }
+            };
+            match message {
+                OwnedMessage::Close(_) => {
+                    // Got a close message, so send a close message and return
+                    let _ = tx_1.send(OwnedMessage::Close(None));
+                    return;
+                }
+                OwnedMessage::Ping(data) => {
+                    match tx_1.send(OwnedMessage::Pong(data)) {
+                        // Send a pong in response
+                        Ok(()) => (),
+                        Err(e) => {
+                            println!("Receive Loop: {:?}", e);
+                            return;
+                        }
+                    }
+                }
+                // Say what we received
+                _ => println!("Receive Loop: {:?}", message),
+            }
+        }
+    });
+
 }
