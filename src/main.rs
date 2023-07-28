@@ -1,5 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]  // https://bevy-cheatbook.github.io/platforms/windows.html#disabling-the-windows-console
 
+use std::fmt;
+use std::fmt::Formatter;
+use std::sync::Arc;
 use bevy::{prelude::*, render::camera::Projection, window::PrimaryWindow};
 use bevy::winit::WinitWindows;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
@@ -9,13 +12,16 @@ use image;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use async_trait::async_trait;
 use ezsockets::ClientConfig;
-use ezsockets::CloseCode;
-use ezsockets::CloseFrame;
 use ezsockets::Error;
-use bevy::tasks::IoTaskPool;
+use ezsockets::{Client as EzClient};
+use serde::{Serialize, Deserialize};
 use bevy::utils::tracing;
 use bevy_tokio_tasks::TokioTasksRuntime;
 use url::Url;
+use serde_json;
+use tokio;
+use tokio::sync::Mutex;
+use websocket::futures::Future;
 
 #[derive(Default, Resource)]
 struct OccupiedScreenSpace {
@@ -29,7 +35,7 @@ struct OccupiedScreenSpace {
 struct UiState {
     chat_input_text: String,
     sending_chat_message: bool,
-    messages: Vec<(String, String)>,
+    messages: Vec<ChatMessage>,
 }
 
 #[derive(Event)]
@@ -38,11 +44,31 @@ struct ChatMessageSentStartedEvent(pub String);
 #[derive(Event)]
 struct ChatMessageSentSuccessEvent(pub String);
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct ChatHandle(pub String);
+impl fmt::Display for ChatHandle {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct ChatMessageText(pub String);
 
-#[derive(Event)]
-struct ChatMessageReceivedEvent(pub ChatHandle, pub ChatMessageText);
+impl fmt::Display for ChatMessageText {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct ChatMessage {
+    message: ChatMessageText,
+    handle: ChatHandle,
+    // chatId
+}
+
+#[derive(Event, Clone)]
+struct ChatMessageReceivedEvent(pub ChatMessage);
 
 const CAMERA_TARGET: Vec3 = Vec3::ZERO;
 
@@ -53,7 +79,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "FUN chatroom!".into(),
+                title: "FUN chatroom!".to_string(),
                 //resolution: (500., 300.).into(),
                 //present_mode: PresentMode::AutoVsync,
                 window_theme: Some(WindowTheme::Dark),
@@ -127,9 +153,9 @@ fn ui_example_system(
     egui::CentralPanel::default().show(ctx, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
             let messages = &ui_state.messages;
-            for (i, (name, message)) in messages.iter().enumerate() {
+            for (i, m) in messages.iter().enumerate() {
                 let res = ui.vertical(|ui| {
-                    ui.label(format!("{}: {}", name, message));
+                    ui.label(format!("{}: {}", m.handle, m.message));
                 });
                 // Add separator between messages
                 if i < messages.len() - 1 {
@@ -163,6 +189,7 @@ fn setup_system(
         transform: Transform::from_xyz(0.0, 0.5, 0.0),
         ..Default::default()
     });
+    // TODO remove, from cube example
     commands.spawn(PointLightBundle {
         point_light: PointLight {
             intensity: 1500.0,
@@ -235,7 +262,7 @@ fn handle_chat_message_sent_started_event_system(
 
 ) {
     for event in chat_message_sent_started_events.iter() {
-        println!("sending message: {}", event.0);
+        println!("sending message from input: {}", event.0);
         ui_state.sending_chat_message = false;
         chat_message_sent_success_events.send(ChatMessageSentSuccessEvent(event.0.clone()));
     }
@@ -243,10 +270,11 @@ fn handle_chat_message_sent_started_event_system(
 
 fn handle_chat_message_sent_success_event_system(
     mut chat_message_sent_success_events_r: EventReader<ChatMessageSentSuccessEvent>,
-    mut ui_state: ResMut<UiState>,
+    mut stream_sender: ResMut<WsClient>,
 ) {
     for event in chat_message_sent_success_events_r.iter() {
-        ui_state.messages.push(("You".to_string(), event.0.clone()));
+        println!("sending msg to stream");
+        stream_sender.0.call(Call::NewLine(event.0.clone()));
     }
 }
 
@@ -255,7 +283,7 @@ fn handle_chat_message_received_event_system(
     mut ui_state: ResMut<UiState>,
 ) {
     for event in events.iter() {
-        ui_state.messages.push((event.0.0.clone(), event.1.0.clone()));
+        ui_state.messages.push(event.0.clone());
     }
 }
 
@@ -293,7 +321,7 @@ enum Call {
 
 struct Client {
     handle: ezsockets::Client<Self>,
-    tx: Sender<String>,
+    tx: Sender<ChatMessage>,
 }
 
 #[async_trait]
@@ -302,8 +330,10 @@ impl ezsockets::ClientExt for Client {
 
     async fn on_text(&mut self, text: String) -> Result<(), Error> {
         tracing::info!("received message: {text}");
-        self.tx.send(text).map_err(|e| Error::from(e.to_string()))
-        // Ok(())
+        let message = serde_json::from_str::<ChatMessage>(&text)
+            .map_err(|e| Error::from(e.to_string()))?;
+        self.tx.send(message).map_err(|e| Error::from(e.to_string())) // .await?
+
     }
 
     async fn on_binary(&mut self, bytes: Vec<u8>) -> Result<(), Error> {
@@ -312,18 +342,10 @@ impl ezsockets::ClientExt for Client {
     }
 
     async fn on_call(&mut self, call: Self::Call) -> Result<(), Error> {
+        println!("recv call");
         match call {
             Call::NewLine(line) => {
-                // if line == "exit" {
-                //     tracing::info!("exiting...");
-                //     self.handle
-                //         .close(Some(CloseFrame {
-                //             code: CloseCode::Normal,
-                //             reason: "adios!".to_string(),
-                //         }))
-                //         .await;
-                //     return Ok(());
-                // }
+                println!("recv newline: {line}");
                 tracing::info!("sending {line}");
                 self.handle.text(line);
             }
@@ -333,41 +355,48 @@ impl ezsockets::ClientExt for Client {
 }
 
 #[derive(Resource, Deref)]
-struct StreamReceiver(Receiver<String>);
+struct StreamReceiver(Receiver<ChatMessage>);
+
+#[derive(Resource, Deref)]
+struct StreamSender(Sender<String>);
+#[derive(Resource, Deref)]
+struct WsClient(EzClient<Client>);
 
 fn websocket_system(mut commands: Commands, runtime: ResMut<TokioTasksRuntime>) {
-    let (tx, rx) = bounded::<String>(10);
-    runtime.spawn_background_task(|_ctx| async move {
+    let (tx, rx) = bounded::<ChatMessage>(10);
+    let (tx0, rx0) = bounded::<String>(10);
+    let (handle, future) = runtime.runtime().block_on(runtime.spawn_background_task(|_ctx| async move {
         println!("This task is running on a background thread");
         // tracing_subscriber::fmt::init();
         let url = "ws://127.0.0.1:80".to_string();
         let url = Url::parse(&url).unwrap();
         let config = ClientConfig::new(url);
-        let (handle, future) = ezsockets::connect(|handle| Client { handle, tx }, config).await;
-        // tokio::spawn(async move {
-        //     let stdin = std::io::stdin();
-        //     let lines = stdin.lock().lines();
-        //     for line in lines {
-        //         let line = line.unwrap();
-        //         handle.call(Call::NewLine(line));
-        //     }
-        // });
-        // handle.call(Call::NewLine("hello".to_string()));
+        ezsockets::connect(|handle| Client { handle, tx }, config).await
+
+    })).unwrap();
+    // handle.call(Call::NewLine("hello".to_string()));
+    // tokio::spawn(async move {
+    //     loop {
+    //         for m in rx0.try_iter() {
+    //             println!("sending message to handle: {}", m);
+    //             handle.call(Call::NewLine(m));
+    //         }
+    //     }
+    // });
+    runtime.spawn_background_task(|_ctx| async move {
         future.await.unwrap();
     });
+
     commands.insert_resource(StreamReceiver(rx));
-    // IoTaskPool::get()
-    //     .spawn(async move {
-    //
-    //     })
-    //     .detach();
+    commands.insert_resource(StreamSender(tx0));
+    commands.insert_resource(WsClient(handle));
 
 
 }
 
 fn read_stream_system(receiver: Res<StreamReceiver>, mut events: EventWriter<ChatMessageReceivedEvent>) {
-    for s in receiver.try_iter() {
+    for m in receiver.try_iter() {
         // TODO parse
-        events.send(ChatMessageReceivedEvent(ChatHandle("TODO".to_string()), ChatMessageText(s)));
+        events.send(ChatMessageReceivedEvent(m));
     }
 }
