@@ -7,6 +7,15 @@ use bevy::window::{WindowTheme};
 use winit::window::{Icon};
 use image;
 use crossbeam_channel::{bounded, Receiver, Sender};
+use async_trait::async_trait;
+use ezsockets::ClientConfig;
+use ezsockets::CloseCode;
+use ezsockets::CloseFrame;
+use ezsockets::Error;
+use bevy::tasks::IoTaskPool;
+use bevy::utils::tracing;
+use bevy_tokio_tasks::TokioTasksRuntime;
+use url::Url;
 
 #[derive(Default, Resource)]
 struct OccupiedScreenSpace {
@@ -276,20 +285,6 @@ fn set_window_icon(
 }
 
 const CONNECTION: &'static str = "ws://localhost:80";
-
-// TODO https://github.com/gbaranski/ezsockets or tokio
-// https://github.com/peterholko/bevy_tokio_tungstenite
-// https://github.com/NoahShomette/bevy_easy_websockets
-
-use async_trait::async_trait;
-use ezsockets::ClientConfig;
-use ezsockets::CloseCode;
-use ezsockets::CloseFrame;
-use ezsockets::Error;
-use bevy::tasks::IoTaskPool;
-use bevy::utils::tracing;
-use bevy_tokio_tasks::TokioTasksRuntime;
-use url::Url;
 
 #[derive(Debug)]
 enum Call {
