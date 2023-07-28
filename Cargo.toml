@@ -12,6 +12,11 @@ image = "0.24.6"
 # same as bevy
 winit = "0.28.6"
 websocket = "0.26.5"
+ezsockets = "0.5.1"
+async-trait = "0.1.72"
+url = "2.4.0"
+bevy-tokio-tasks = "0.11.0"
+crossbeam-channel = "0.5.8"
 
 
 # Enable a small amount of optimization in debug mode

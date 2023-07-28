@@ -6,11 +6,7 @@ use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy::window::{WindowTheme};
 use winit::window::{Icon};
 use image;
-use std::sync::mpsc::channel;
-use std::thread;
-
-use websocket::client::ClientBuilder;
-use websocket::{Message, OwnedMessage};
+use crossbeam_channel::{bounded, Receiver, Sender};
 
 #[derive(Default, Resource)]
 struct OccupiedScreenSpace {
@@ -33,6 +29,12 @@ struct ChatMessageSentStartedEvent(pub String);
 #[derive(Event)]
 struct ChatMessageSentSuccessEvent(pub String);
 
+struct ChatHandle(pub String);
+struct ChatMessageText(pub String);
+
+#[derive(Event)]
+struct ChatMessageReceivedEvent(pub ChatHandle, pub ChatMessageText);
+
 const CAMERA_TARGET: Vec3 = Vec3::ZERO;
 
 #[derive(Resource, Deref, DerefMut)]
@@ -51,18 +53,23 @@ fn main() {
             ..default()
         }),)
         .add_plugins(EguiPlugin)
+        .add_plugins(bevy_tokio_tasks::TokioTasksPlugin::default())
         .init_resource::<OccupiedScreenSpace>()
         .init_resource::<UiState>()
+        // .init_resource::<StreamReceiver>()
         .add_systems(Startup, set_window_icon)
         .add_systems(Startup, setup_system)
         .add_systems(Startup, websocket_system)
         .add_systems(Update, ui_example_system)
         .add_event::<ChatMessageSentStartedEvent>()
         .add_event::<ChatMessageSentSuccessEvent>()
+        .add_event::<ChatMessageReceivedEvent>()
         // .add_systems(Startup, configure_ui_state_system)
         .add_systems(Update, update_camera_transform_system)
         .add_systems(Update, handle_chat_message_sent_started_event_system)
         .add_systems(Update, handle_chat_message_sent_success_event_system)
+        .add_systems(Update, handle_chat_message_received_event_system)
+        .add_systems(Update, read_stream_system)
         .run();
 }
 
@@ -199,7 +206,7 @@ fn update_camera_transform_system(
 
 fn handle_chat_input(
     ui: &egui::Ui,
-    mut ui_state: &mut ResMut<UiState>,
+    ui_state: &mut ResMut<UiState>,
     events: &mut EventWriter<ChatMessageSentStartedEvent>,
 ) {
     if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -234,6 +241,15 @@ fn handle_chat_message_sent_success_event_system(
     }
 }
 
+fn handle_chat_message_received_event_system(
+    mut events: EventReader<ChatMessageReceivedEvent>,
+    mut ui_state: ResMut<UiState>,
+) {
+    for event in events.iter() {
+        ui_state.messages.push((event.0.0.clone(), event.1.0.clone()));
+    }
+}
+
 // ostensibly sets an icon
 fn set_window_icon(
     // we have to use `NonSend` here
@@ -261,58 +277,102 @@ fn set_window_icon(
 
 const CONNECTION: &'static str = "ws://localhost:80";
 
-fn websocket_system(events: &mut EventWriter<ChatMessageSentStartedEvent>,) {
-    println!("Connecting to {}", CONNECTION);
+// TODO https://github.com/gbaranski/ezsockets or tokio
+// https://github.com/peterholko/bevy_tokio_tungstenite
+// https://github.com/NoahShomette/bevy_easy_websockets
 
-    // TODO reconnects
-    let client = ClientBuilder::new(CONNECTION)
-        .unwrap()
-        .add_protocol("rust-websocket")
-        .connect_insecure()
-        .unwrap();
+use async_trait::async_trait;
+use ezsockets::ClientConfig;
+use ezsockets::CloseCode;
+use ezsockets::CloseFrame;
+use ezsockets::Error;
+use bevy::tasks::IoTaskPool;
+use bevy::utils::tracing;
+use bevy_tokio_tasks::TokioTasksRuntime;
+use url::Url;
 
-    println!("Successfully connected");
+#[derive(Debug)]
+enum Call {
+    NewLine(String),
+}
 
-    let (mut receiver, mut sender) = client.split().unwrap();
+struct Client {
+    handle: ezsockets::Client<Self>,
+    tx: Sender<String>,
+}
 
-    let (tx, rx) = channel();
+#[async_trait]
+impl ezsockets::ClientExt for Client {
+    type Call = Call;
 
-    let tx_1 = tx.clone();
+    async fn on_text(&mut self, text: String) -> Result<(), Error> {
+        tracing::info!("received message: {text}");
+        self.tx.send(text).map_err(|e| Error::from(e.to_string()))
+        // Ok(())
+    }
 
-    let receive_loop = thread::spawn(move || {
-        // Receive loop
-        for message in receiver.incoming_messages() {
-            let message = match message {
-                Ok(m) => m,
-                Err(e) => {
-                    println!("Receive Loop: {:?}", e);
-                    let _ = tx_1.send(OwnedMessage::Close(None));
-                    return;
-                }
-            };
-            match message {
-                OwnedMessage::Close(_) => {
-                    // Got a close message, so send a close message and return
-                    let _ = tx_1.send(OwnedMessage::Close(None));
-                    return;
-                }
-                OwnedMessage::Ping(data) => {
-                    match tx_1.send(OwnedMessage::Pong(data)) {
-                        // Send a pong in response
-                        Ok(()) => (),
-                        Err(e) => {
-                            println!("Receive Loop: {:?}", e);
-                            return;
-                        }
-                    }
-                }
-                // Say what we received
-                _ => {
-                    println!("Receive Loop: {:?}", message);
-                    events.send(ChatMessageReceivedEvent(message.to_string()));
-                },
+    async fn on_binary(&mut self, bytes: Vec<u8>) -> Result<(), Error> {
+        tracing::info!("received bytes: {bytes:?}");
+        Ok(())
+    }
+
+    async fn on_call(&mut self, call: Self::Call) -> Result<(), Error> {
+        match call {
+            Call::NewLine(line) => {
+                // if line == "exit" {
+                //     tracing::info!("exiting...");
+                //     self.handle
+                //         .close(Some(CloseFrame {
+                //             code: CloseCode::Normal,
+                //             reason: "adios!".to_string(),
+                //         }))
+                //         .await;
+                //     return Ok(());
+                // }
+                tracing::info!("sending {line}");
+                self.handle.text(line);
             }
-        }
-    });
+        };
+        Ok(())
+    }
+}
 
+#[derive(Resource, Deref)]
+struct StreamReceiver(Receiver<String>);
+
+fn websocket_system(mut commands: Commands, runtime: ResMut<TokioTasksRuntime>) {
+    let (tx, rx) = bounded::<String>(10);
+    runtime.spawn_background_task(|_ctx| async move {
+        println!("This task is running on a background thread");
+        // tracing_subscriber::fmt::init();
+        let url = "ws://127.0.0.1:80".to_string();
+        let url = Url::parse(&url).unwrap();
+        let config = ClientConfig::new(url);
+        let (handle, future) = ezsockets::connect(|handle| Client { handle, tx }, config).await;
+        // tokio::spawn(async move {
+        //     let stdin = std::io::stdin();
+        //     let lines = stdin.lock().lines();
+        //     for line in lines {
+        //         let line = line.unwrap();
+        //         handle.call(Call::NewLine(line));
+        //     }
+        // });
+        // handle.call(Call::NewLine("hello".to_string()));
+        future.await.unwrap();
+    });
+    commands.insert_resource(StreamReceiver(rx));
+    // IoTaskPool::get()
+    //     .spawn(async move {
+    //
+    //     })
+    //     .detach();
+
+
+}
+
+fn read_stream_system(receiver: Res<StreamReceiver>, mut events: EventWriter<ChatMessageReceivedEvent>) {
+    for s in receiver.try_iter() {
+        // TODO parse
+        events.send(ChatMessageReceivedEvent(ChatHandle("TODO".to_string()), ChatMessageText(s)));
+    }
 }
