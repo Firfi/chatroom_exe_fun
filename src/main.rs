@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::fmt::Formatter;
+use std::string::ToString;
 use std::sync::Arc;
 use bevy::{prelude::*, render::camera::Projection, window::PrimaryWindow};
 use bevy::winit::WinitWindows;
@@ -15,7 +16,8 @@ use ezsockets::ClientConfig;
 use ezsockets::Error;
 use ezsockets::{Client as EzClient};
 use serde::{Serialize, Deserialize};
-use bevy::utils::tracing;
+use bevy::utils::{HashSet, tracing};
+use bevy_egui::egui::Ui;
 use bevy_tokio_tasks::TokioTasksRuntime;
 use url::Url;
 use serde_json;
@@ -31,10 +33,21 @@ struct OccupiedScreenSpace {
     bottom: f32,
 }
 
+
+use phf::phf_set;
+
+// TODO from backend init
+static CHAT_HANDLES: phf::Set<&'static str> = phf_set! {
+    "tete",
+    "pepe"
+};
+
 #[derive(Default, Resource)]
 struct UiState {
     chat_input_text: String,
+    login_input_text: String,
     sending_chat_message: bool,
+    chat_handle: Option<ChatHandle>,
     messages: Vec<ChatMessage>,
 }
 
@@ -75,6 +88,9 @@ const CAMERA_TARGET: Vec3 = Vec3::ZERO;
 #[derive(Resource, Deref, DerefMut)]
 struct OriginalCameraTransform(Transform);
 
+#[derive(Event)]
+struct LoggedIn(pub ChatHandle);
+
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -95,10 +111,13 @@ fn main() {
         .add_systems(Startup, set_window_icon)
         .add_systems(Startup, setup_system)
         .add_systems(Startup, websocket_system)
-        .add_systems(Update, ui_example_system)
+        .add_systems(Update, сhat_ui_system)
+        .add_systems(Update, login_ui_system)
+        .add_systems(Update, logged_in_system)
         .add_event::<ChatMessageSentStartedEvent>()
         .add_event::<ChatMessageSentSuccessEvent>()
         .add_event::<ChatMessageReceivedEvent>()
+        .add_event::<LoggedIn>()
         // .add_systems(Startup, configure_ui_state_system)
         .add_systems(Update, update_camera_transform_system)
         .add_systems(Update, handle_chat_message_sent_started_event_system)
@@ -108,13 +127,53 @@ fn main() {
         .run();
 }
 
-fn ui_example_system(
+fn login_ui_system(
+    mut contexts: EguiContexts,
+    mut ui_state: ResMut<UiState>,
+    mut event_writer: EventWriter<LoggedIn>
+) {
+    if ui_state.chat_handle.is_some() {
+        return;
+    }
+    let ctx = contexts.ctx_mut();
+    egui::Window::new("Login").auto_sized().show(ctx, |ui| {
+        let res = ui.add(egui::TextEdit::singleline(&mut ui_state.login_input_text));
+        res.request_focus();
+        if res.ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+            match CHAT_HANDLES.iter().find(|h| h.to_string() == ui_state.login_input_text) {
+                Some(h) => {
+                    event_writer.send(LoggedIn(ChatHandle(h.to_string())));
+                }
+                None => {
+
+                }
+            }
+        }
+    });
+}
+
+fn logged_in_system(
+    mut ui_state: ResMut<UiState>,
+    mut event_reader: EventReader<LoggedIn>
+) {
+    for e in event_reader.iter() {
+        ui_state.chat_handle = Some(e.0.clone());
+        ui_state.login_input_text = "".to_string();
+    }
+}
+
+fn сhat_ui_system(
     mut contexts: EguiContexts,
     mut occupied_screen_space: ResMut<OccupiedScreenSpace>,
     mut ui_state: ResMut<UiState>,
     mut chat_message_sent_started_events: EventWriter<ChatMessageSentStartedEvent>,
     chat_message_sent_success_events: EventReader<ChatMessageSentSuccessEvent>,
+    mut logged_in_events: EventReader<LoggedIn>
 ) {
+    let chat_handle = ui_state.chat_handle.clone();
+    if chat_handle.is_none() {
+        return;
+    }
     let ctx = contexts.ctx_mut();
     occupied_screen_space.right = egui::SidePanel::right("right_panel")
         .resizable(true)
@@ -129,20 +188,25 @@ fn ui_example_system(
         .response
         .rect
         .width();
+    let just_logged_in = logged_in_events.iter().len() > 0;
     occupied_screen_space.bottom = egui::TopBottomPanel::bottom("bottom_panel")
         .resizable(true)
         .show(ctx, |ui| {
             if ui_state.sending_chat_message {
                 ui.label("Sending message...");
             } else {
-                ui.horizontal(|ui| {
+                let input = ui.horizontal(|ui| {
                     let res = ui.add_sized(ui.available_size(), egui::TextEdit::singleline(&mut ui_state.chat_input_text));
                     if !chat_message_sent_success_events.is_empty() {
                         res.request_focus();
                     }
+                    if just_logged_in {
+                        res.request_focus();
+                    }
+                    res
                 });
 
-                handle_chat_input(&ui, &mut ui_state, &mut chat_message_sent_started_events);
+                handle_chat_input(&input.response.ctx, &mut ui_state, &mut chat_message_sent_started_events);
 
             }
             ui.set_min_height(100.0);
@@ -241,11 +305,11 @@ fn update_camera_transform_system(
 }
 
 fn handle_chat_input(
-    ui: &egui::Ui,
+    ctx: &egui::Context,
     ui_state: &mut ResMut<UiState>,
     events: &mut EventWriter<ChatMessageSentStartedEvent>,
 ) {
-    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+    if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
         if ui_state.chat_input_text.len() > 0 {
             ui_state.sending_chat_message = true;
 
@@ -268,13 +332,15 @@ fn handle_chat_message_sent_started_event_system(
     }
 }
 
+
 fn handle_chat_message_sent_success_event_system(
     mut chat_message_sent_success_events_r: EventReader<ChatMessageSentSuccessEvent>,
     mut stream_sender: ResMut<WsClient>,
+    ui_state: Res<UiState>
 ) {
     for event in chat_message_sent_success_events_r.iter() {
         println!("sending msg to stream");
-        stream_sender.0.call(Call::NewLine(event.0.clone()));
+        stream_sender.0.call(Call::NewLine(ui_state.chat_handle.clone().expect("chat handle is supposed to be here"), event.0.clone()));
     }
 }
 
@@ -316,12 +382,18 @@ const CONNECTION: &'static str = "ws://localhost:80";
 
 #[derive(Debug)]
 enum Call {
-    NewLine(String),
+    NewLine(ChatHandle, String),
 }
 
 struct Client {
     handle: ezsockets::Client<Self>,
     tx: Sender<ChatMessage>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct OutMessage {
+    handle: ChatHandle,
+    message: String
 }
 
 #[async_trait]
@@ -344,10 +416,14 @@ impl ezsockets::ClientExt for Client {
     async fn on_call(&mut self, call: Self::Call) -> Result<(), Error> {
         println!("recv call");
         match call {
-            Call::NewLine(line) => {
+            Call::NewLine(handle, line) => {
                 println!("recv newline: {line}");
                 tracing::info!("sending {line}");
-                self.handle.text(line);
+                let msg = OutMessage {
+                    handle,
+                    message: line
+                };
+                self.handle.text(serde_json::to_string(&msg)?);
             }
         };
         Ok(())
@@ -371,6 +447,7 @@ fn websocket_system(mut commands: Commands, runtime: ResMut<TokioTasksRuntime>) 
         let url = "ws://127.0.0.1:80".to_string();
         let url = Url::parse(&url).unwrap();
         let config = ClientConfig::new(url);
+        // TODO handle no network
         ezsockets::connect(|handle| Client { handle, tx }, config).await
 
     })).unwrap();
