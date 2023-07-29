@@ -1,0 +1,15 @@
+#!/bin/bash
+cargo build --release --target x86_64-apple-darwin
+cargo build --release --target aarch64-apple-darwin
+mkdir -p ChatroomExeFun.app/Contents/MacOS/
+mkdir -p ChatroomExeFun.app/Contents/Resources/
+lipo "target/x86_64-apple-darwin/release/chatroom_exe_fun" \
+     "target/aarch64-apple-darwin/release/chatroom_exe_fun" \
+     -create -output "ChatroomExeFun.app/Contents/MacOS/ChatroomExeFun"
+cp -a assets ChatroomExeFun.app/Contents/MacOS/
+cp Settings.toml ChatroomExeFun.app/Contents/MacOS/Settings.toml
+rm -f chatroom_exe_fun.dmg
+hdiutil create -fs HFS+ \
+  -volname "Fun Chat Room" \
+  -srcfolder "ChatroomExeFun.app" \
+  "chatroom_exe_fun.dmg"

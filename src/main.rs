@@ -95,11 +95,24 @@ struct LoggedIn(pub ChatHandle);
 #[derive(Resource)]
 struct WsUrl(pub String);
 
+use config::Config;
+
 impl Default for WsUrl {
     fn default() -> Self {
-        dotenv().ok();
-        let ws_url = env::var("WS_URL").unwrap();
-        WsUrl(ws_url)
+        // dotenv().ok();
+        // TODO fix it in build; osx build can't find the file anywhere
+        // let mut exe_path = env::current_exe().unwrap();
+        // exe_path.pop(); // remove the file itself
+        // let p = exe_path.join("assets/Settings");
+        // let o_path = p.to_str();
+        // let path = o_path.expect("Settings path not here?");
+        // let settings = Config::builder()
+        //     .add_source(config::File::with_name(path))
+        //     // .add_source(config::Environment::default())
+        //     .build()
+        //     .unwrap();
+        // let ws_url = settings.get_string("WS_URL").expect("WS_URL expected at this point");
+        WsUrl("TODO conf".to_string())
     }
 }
 
@@ -377,18 +390,18 @@ fn set_window_icon(
 
     // here we use the `image` crate to load our icon data from a png file
     // this is not a very bevy-native solution, but it will do
-    let (icon_rgba, icon_width, icon_height) = {
-        let image = image::open("assets/icon.png")
-            .expect("Failed to open icon path")
-            .into_rgba8();
-        let (width, height) = image.dimensions();
-        let rgba = image.into_raw();
-        (rgba, width, height)
-    };
-
-    let icon = Icon::from_rgba(icon_rgba, icon_width, icon_height).unwrap();
-
-    primary.set_window_icon(Some(icon));
+    // let (icon_rgba, icon_width, icon_height) = {
+    //     let image = image::open("assets/icon.png")
+    //         .expect("Failed to open icon path")
+    //         .into_rgba8();
+    //     let (width, height) = image.dimensions();
+    //     let rgba = image.into_raw();
+    //     (rgba, width, height)
+    // };
+    //
+    // let icon = Icon::from_rgba(icon_rgba, icon_width, icon_height).unwrap();
+    //
+    // primary.set_window_icon(Some(icon));
 }
 
 #[derive(Debug)]
