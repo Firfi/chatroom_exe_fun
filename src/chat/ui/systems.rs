@@ -5,7 +5,7 @@ use crate::chat::ui::events::{ChatMessageSentStartedEvent, ChatMessageSentSucces
 use crate::login::events::LoggedIn;
 use crate::ui::resources::{OccupiedScreenSpace, UiState};
 
-pub fn сhat_ui_system(
+pub fn chat_ui_system(
     mut contexts: EguiContexts,
     mut occupied_screen_space: ResMut<OccupiedScreenSpace>,
     mut ui_state: ResMut<UiState>,

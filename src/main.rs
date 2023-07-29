@@ -12,13 +12,13 @@ use std::string::ToString;
 use bevy::{prelude::*};
 use bevy_egui::EguiPlugin;
 use bevy::window::WindowTheme;
-use image;
-use bevy::app::AppLabel;
-use serde::{Deserialize, Serialize};
+
+
+
 use bevy_embedded_assets::EmbeddedAssetPlugin;
-use serde_json;
-use tokio;
-use websocket::futures::Future;
+
+
+
 use chat::message::events::ChatMessageReceivedEvent;
 use login::events::LoggedIn;
 use crate::ws::url::resources::WsUrl;
@@ -26,7 +26,7 @@ use chat::ui::events::{ChatMessageSentStartedEvent, ChatMessageSentSuccessEvent}
 use ui::resources::{OccupiedScreenSpace, UiState};
 use crate::chat::message::systems::handle_chat_message_sent_success_event_system;
 use crate::chat::systems::read_stream_system;
-use crate::chat::ui::systems::{handle_chat_message_received_event_system, handle_chat_message_sent_started_event_system, сhat_ui_system};
+use crate::chat::ui::systems::{handle_chat_message_received_event_system, handle_chat_message_sent_started_event_system, chat_ui_system};
 use crate::login::systems::{logged_in_system, login_ui_system};
 use crate::misc::systems::{cube_system, update_camera_transform_system};
 use crate::ui::systems::set_window_icon;
@@ -52,7 +52,7 @@ fn main() {
         .add_systems(Startup, set_window_icon)
         .add_systems(Startup, cube_system)
         .add_systems(Startup, websocket_system)
-        .add_systems(Update, сhat_ui_system)
+        .add_systems(Update, chat_ui_system)
         .add_systems(Update, login_ui_system)
         .add_systems(Update, logged_in_system)
         .add_event::<ChatMessageSentStartedEvent>()

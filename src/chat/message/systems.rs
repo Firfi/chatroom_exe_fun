@@ -6,7 +6,7 @@ use crate::ws::resources::WsClient;
 
 pub fn handle_chat_message_sent_success_event_system(
     mut chat_message_sent_success_events_r: EventReader<ChatMessageSentSuccessEvent>,
-    mut ws_client: ResMut<WsClient>,
+    ws_client: ResMut<WsClient>,
     ui_state: Res<UiState>
 ) {
     for event in chat_message_sent_success_events_r.iter() {

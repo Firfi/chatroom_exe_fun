@@ -1,5 +1,5 @@
 use bevy::prelude::{Deref, Resource};
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver};
 use crate::chat::message::ChatMessage;
 
 #[derive(Resource, Deref)]
