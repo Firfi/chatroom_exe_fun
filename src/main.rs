@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]  // https://bevy-cheatbook.github.io/platforms/windows.html#disabling-the-windows-console
 
-use std::fmt;
+use std::{env, fmt};
 use std::fmt::Formatter;
 use std::string::ToString;
 use std::sync::Arc;
@@ -19,6 +19,7 @@ use serde::{Serialize, Deserialize};
 use bevy::utils::{HashSet, tracing};
 use bevy_egui::egui::Ui;
 use bevy_tokio_tasks::TokioTasksRuntime;
+use dotenv::dotenv;
 use url::Url;
 use serde_json;
 use tokio;
@@ -91,6 +92,17 @@ struct OriginalCameraTransform(Transform);
 #[derive(Event)]
 struct LoggedIn(pub ChatHandle);
 
+#[derive(Resource)]
+struct WsUrl(pub String);
+
+impl Default for WsUrl {
+    fn default() -> Self {
+        dotenv().ok();
+        let ws_url = env::var("WS_URL").unwrap();
+        WsUrl(ws_url)
+    }
+}
+
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -107,6 +119,7 @@ fn main() {
         .add_plugins(bevy_tokio_tasks::TokioTasksPlugin::default())
         .init_resource::<OccupiedScreenSpace>()
         .init_resource::<UiState>()
+        .init_resource::<WsUrl>()
         // .init_resource::<StreamReceiver>()
         .add_systems(Startup, set_window_icon)
         .add_systems(Startup, setup_system)
@@ -378,8 +391,6 @@ fn set_window_icon(
     primary.set_window_icon(Some(icon));
 }
 
-const CONNECTION: &'static str = "ws://localhost:80";
-
 #[derive(Debug)]
 enum Call {
     NewLine(ChatHandle, String),
@@ -438,13 +449,13 @@ struct StreamSender(Sender<String>);
 #[derive(Resource, Deref)]
 struct WsClient(EzClient<Client>);
 
-fn websocket_system(mut commands: Commands, runtime: ResMut<TokioTasksRuntime>) {
+fn websocket_system(mut commands: Commands, runtime: ResMut<TokioTasksRuntime>, ws_url: Res<WsUrl>) {
+    let url = ws_url.0.to_string();
     let (tx, rx) = bounded::<ChatMessage>(10);
     let (tx0, rx0) = bounded::<String>(10);
     let (handle, future) = runtime.runtime().block_on(runtime.spawn_background_task(|_ctx| async move {
         println!("This task is running on a background thread");
         // tracing_subscriber::fmt::init();
-        let url = "ws://127.0.0.1:80".to_string();
         let url = Url::parse(&url).unwrap();
         let config = ClientConfig::new(url);
         // TODO handle no network
