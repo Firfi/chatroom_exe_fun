@@ -7,18 +7,10 @@ mod chat;
 mod login;
 mod ui;
 mod misc;
-
 use std::string::ToString;
 use bevy::{prelude::*};
 use bevy_egui::EguiPlugin;
-use bevy::window::WindowTheme;
-
-
-
-use bevy_embedded_assets::EmbeddedAssetPlugin;
-
-
-
+use bevy::window::WindowTheme;use bevy_embedded_assets::EmbeddedAssetPlugin;
 use chat::message::events::ChatMessageReceivedEvent;
 use login::events::LoggedIn;
 use crate::ws::url::resources::WsUrl;
@@ -43,7 +35,7 @@ fn main() {
                 ..default()
             }),
             ..default()
-        }).add_before::<bevy::asset::AssetPlugin, _>(EmbeddedAssetPlugin),)
+        }).add_before::<AssetPlugin, _>(EmbeddedAssetPlugin),)
         .add_plugins(EguiPlugin)
         .add_plugins(bevy_tokio_tasks::TokioTasksPlugin::default())
         .init_resource::<OccupiedScreenSpace>()
