@@ -1,4 +1,5 @@
 bevy frontend for chatroom prototype, done for performance (art) reasons; UI is immediate mode, egui;
 
-TODO networking and all that
+assets/Settings.toml should be present
+
 TODO fun effects for chat messages

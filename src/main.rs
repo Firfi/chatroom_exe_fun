@@ -1,14 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]  // https://bevy-cheatbook.github.io/platforms/windows.html#disabling-the-windows-console
-
 use std::{env, fmt};
 use std::fmt::Formatter;
 use std::string::ToString;
-use std::sync::Arc;
 use bevy::{prelude::*, render::camera::Projection, window::PrimaryWindow};
 use bevy::winit::WinitWindows;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy::window::{WindowTheme};
-use winit::window::{Icon};
 use image;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use async_trait::async_trait;
@@ -16,14 +13,12 @@ use ezsockets::ClientConfig;
 use ezsockets::Error;
 use ezsockets::{Client as EzClient};
 use serde::{Serialize, Deserialize};
-use bevy::utils::{HashSet, tracing};
-use bevy_egui::egui::Ui;
+use bevy::utils::{tracing};
+use bevy_embedded_assets::EmbeddedAssetPlugin;
 use bevy_tokio_tasks::TokioTasksRuntime;
-use dotenv::dotenv;
 use url::Url;
 use serde_json;
 use tokio;
-use tokio::sync::Mutex;
 use websocket::futures::Future;
 
 #[derive(Default, Resource)]
@@ -61,7 +56,7 @@ struct ChatMessageSentSuccessEvent(pub String);
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct ChatHandle(pub String);
 impl fmt::Display for ChatHandle {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
@@ -69,7 +64,7 @@ impl fmt::Display for ChatHandle {
 struct ChatMessageText(pub String);
 
 impl fmt::Display for ChatMessageText {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
@@ -99,20 +94,18 @@ use config::Config;
 
 impl Default for WsUrl {
     fn default() -> Self {
-        // dotenv().ok();
-        // TODO fix it in build; osx build can't find the file anywhere
-        // let mut exe_path = env::current_exe().unwrap();
-        // exe_path.pop(); // remove the file itself
-        // let p = exe_path.join("assets/Settings");
-        // let o_path = p.to_str();
-        // let path = o_path.expect("Settings path not here?");
-        // let settings = Config::builder()
-        //     .add_source(config::File::with_name(path))
-        //     // .add_source(config::Environment::default())
-        //     .build()
-        //     .unwrap();
-        // let ws_url = settings.get_string("WS_URL").expect("WS_URL expected at this point");
-        WsUrl("TODO conf".to_string())
+        let mut exe_path = env::current_exe().unwrap();
+        exe_path.pop(); // remove the file itself
+        let p = exe_path.join("assets/Settings");
+        let o_path = p.to_str();
+        let path = o_path.expect("Settings path not here?");
+        let settings = Config::builder()
+            .add_source(config::File::with_name(path))
+            // .add_source(config::Environment::default())
+            .build()
+            .unwrap();
+        let ws_url = settings.get_string("WS_URL").expect("WS_URL expected at this point");
+        WsUrl(ws_url.to_string())
     }
 }
 
@@ -127,7 +120,7 @@ fn main() {
                 ..default()
             }),
             ..default()
-        }),)
+        }).add_before::<bevy::asset::AssetPlugin, _>(EmbeddedAssetPlugin),)
         .add_plugins(EguiPlugin)
         .add_plugins(bevy_tokio_tasks::TokioTasksPlugin::default())
         .init_resource::<OccupiedScreenSpace>()
